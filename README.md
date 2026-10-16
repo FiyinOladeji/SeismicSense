@@ -1,18 +1,15 @@
 # Seismic-Sense
 Technathon Fall 2026 Project
-Problem:
-Earthquake warnings and emergency communication can be limited by latency and infrastructure failure.
-Solution:
-A local ESP32-based emergency node that independently detects abnormal structural motion and creates an offline emergency network.
-Hardware
-- ESP32
-- MPU6050
-- buzzer
-- LED
-- battery
-Day 1
-Local sensing.
-Day 2
-Emergency Wi-Fi portal.
-Day 3
-Integration + demo.
+Overview
+
+Seismic Guardian is a prototype designed to detect abnormal motion locally and provide emergency information when conventional communication infrastructure may be unavailable.
+
+An ESP32 microcontroller reads motion data from an MPU6050 accelerometer and gyroscope module. When measured motion meets the prototype's configurable detection criteria, the firmware transitions into an emergency state.
+
+The planned emergency response includes a local audible/visual alarm, a Wi-Fi access point, and a browser-based emergency information portal hosted directly on the ESP32.
+
+Problem
+
+Earthquake early warnings may provide little or no lead time near an earthquake's source. Earthquakes can also disrupt electrical power, cellular networks, internet access, and cloud services.
+
+Seismic Guardian explores how a locally operating device can continue providing essential information without relying on those external services.
