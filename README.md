@@ -1,6 +1,7 @@
 # Seismic-Sense
-Technathon Fall 2026 Project
-Overview
+Technathon Fall 2026 Project**
+**
+**Overview**
 
 Seismic Guardian is a prototype designed to detect abnormal motion locally and provide emergency information when conventional communication infrastructure may be unavailable.
 
@@ -8,7 +9,7 @@ An ESP32 microcontroller reads motion data from an MPU6050 accelerometer and gyr
 
 The planned emergency response includes a local audible/visual alarm, a Wi-Fi access point, and a browser-based emergency information portal hosted directly on the ESP32.
 
-Problem
+**Problem**
 
 Earthquake early warnings may provide little or no lead time near an earthquake's source. Earthquakes can also disrupt electrical power, cellular networks, internet access, and cloud services.
 
