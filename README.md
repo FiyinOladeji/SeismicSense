@@ -13,4 +13,4 @@ The planned emergency response includes a local audible/visual alarm, a Wi-Fi ac
 
 Earthquake early warnings may provide little or no lead time near an earthquake's source. Earthquakes can also disrupt electrical power, cellular networks, internet access, and cloud services.
 
-Seismic Guardian explores how a locally operating device can continue providing essential information without relying on those external services.
+Seismic-Sense explores how a locally operating device can continue providing essential information without relying on those external services.
