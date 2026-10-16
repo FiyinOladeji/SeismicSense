@@ -3,7 +3,7 @@
 
 **Overview**
 
-Seismic Guardian is a prototype designed to detect abnormal motion locally and provide emergency information when conventional communication infrastructure may be unavailable.
+Seismic-Sense is a prototype designed to detect abnormal motion locally and provide emergency information when conventional communication infrastructure may be unavailable.
 
 An ESP32 microcontroller reads motion data from an MPU6050 accelerometer and gyroscope module. When measured motion meets the prototype's configurable detection criteria, the firmware transitions into an emergency state.
 
