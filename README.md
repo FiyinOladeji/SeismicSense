@@ -1,6 +1,6 @@
 # Seismic-Sense
-Technathon Fall 2026 Project**
-**
+**Technathon Fall 2026 Project**
+
 **Overview**
 
 Seismic Guardian is a prototype designed to detect abnormal motion locally and provide emergency information when conventional communication infrastructure may be unavailable.
