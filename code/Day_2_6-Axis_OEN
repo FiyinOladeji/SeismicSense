@@ -1,1 +1,416 @@
+#include <Wire.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <DNSServer.h>
+#include <math.h>
 
+// --- Wi-Fi SoftAP & Captive Portal Configuration ---
+const char* AP_SSID = "SeismicSense";
+const byte DNS_PORT = 53;
+
+WebServer server(80);
+DNSServer dnsServer;
+bool emergencyNetworkStarted = false;
+
+// --- I2C Address & Hardware Pins ---
+const uint8_t MPU_ADDR = 0x68; 
+const int I2C_SDA = 21;
+const int I2C_SCL = 22;
+const int LED_PIN = 2;      
+const int BUZZER_PIN = 4;   
+
+// --- Tunable Detection Parameters (Accel + Gyro) ---
+const float MOTION_THRESHOLD = 1.5;             // Primary: m/s^2 translational deviation
+const float GYRO_THRESHOLD = 15.0;              // Secondary: deg/s rotational deviation
+const unsigned long VERIFY_DURATION = 1000;     // 1000ms sustained shaking required
+const unsigned long EMERGENCY_COOLDOWN = 15000; // 15s latch in emergency mode
+const unsigned long SAMPLE_INTERVAL = 20;       // 50Hz loop rate (20ms)
+const unsigned long PRINT_INTERVAL = 200;       // Serial status print rate (200ms)
+
+// --- State & Sensor Globals ---
+enum SystemState { STATE_IDLE, STATE_VERIFYING, STATE_EMERGENCY };
+SystemState currentState = STATE_IDLE;
+
+// Baseline offsets (Step 9)
+float baseAx = 0.0, baseAy = 0.0, baseAz = 0.0;
+float baseGx = 0.0, baseGy = 0.0, baseGz = 0.0;
+
+// Live filtered readings
+float currentAccel = 0.0;
+float peakAccel = 0.0;
+float currentGyro = 0.0;
+float peakGyro = 0.0;
+bool gyroConfirmed = false;
+bool sensorHealthy = true;
+
+// Moving average buffers (5 samples = 100ms window)
+const int FILTER_SIZE = 5;
+float accelBuffer[FILTER_SIZE] = {0.0};
+float gyroBuffer[FILTER_SIZE] = {0.0};
+int bufferIndex = 0;
+
+unsigned long verifyStartTime = 0;
+unsigned long emergencyStartTime = 0;
+unsigned long lastSampleTime = 0;
+unsigned long lastPrintTime = 0;
+
+// --- Embedded Mobile Emergency Dashboard ---
+const char EMERGENCY_HTML[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SeismicSense — Emergency Portal</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: #111827; color: #f9fafb; padding: 16px; max-width: 480px; margin: 0 auto; }
+    .banner { background: #dc2626; color: white; padding: 18px; border-radius: 12px; text-align: center; margin-bottom: 16px; box-shadow: 0 4px 15px rgba(220,38,38,0.5); animation: pulse 1.5s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.85; } }
+    .banner h1 { font-size: 1.5rem; letter-spacing: 1px; margin-bottom: 4px; }
+    .banner p { font-size: 0.95rem; font-weight: 600; opacity: 0.95; }
+    .card { background: #1f2937; border: 1px solid #374151; border-radius: 12px; padding: 16px; margin-bottom: 14px; }
+    .card h2 { font-size: 0.9rem; text-transform: uppercase; letter-spacing: 1px; color: #9ca3af; margin-bottom: 12px; }
+    .action-step { display: flex; align-items: center; background: #111827; padding: 12px; border-radius: 8px; margin-bottom: 8px; border-left: 4px solid #f59e0b; font-weight: 700; font-size: 1.1rem; }
+    .action-step span { color: #f59e0b; margin-right: 12px; font-size: 1.3rem; }
+    .metric-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 0.95rem; }
+    .bar-bg { width: 100%; height: 14px; background: #374151; border-radius: 7px; overflow: hidden; margin-top: 8px; margin-bottom: 12px; }
+    .bar-fill { height: 100%; background: #ef4444; width: 50%; transition: width 0.3s ease; }
+    .status-item { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #374151; font-size: 0.9rem; }
+    .status-item:last-child { border-bottom: none; }
+    .ok { color: #34d399; font-weight: 600; }
+    .warn { color: #fbbf24; font-weight: 600; }
+    .offline { color: #f87171; font-weight: 600; }
+  </style>
+</head>
+<body>
+
+  <div class="banner">
+    <h1 id="stateTitle">🚨 EARTHQUAKE DETECTED</h1>
+    <p>OFFLINE MODE — Local Emergency Node Active</p>
+  </div>
+
+  <div class="card">
+    <h2>Immediate Action Required</h2>
+    <div class="action-step"><span>1</span> DROP to your hands and knees</div>
+    <div class="action-step"><span>2</span> COVER your head and neck under shelter</div>
+    <div class="action-step"><span>3</span> HOLD ON until all shaking stops</div>
+    <p style="font-size: 0.85rem; color: #d1d5db; margin-top: 10px; line-height: 1.4;">
+      Stay away from windows and glass. Do <strong>NOT</strong> use elevators. Evacuate only after shaking has completely stopped.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>Live 6-Axis Structural Telemetry</h2>
+    <div class="metric-row">
+      <span>Linear Acceleration (Peak: <span id="peakAcc">--</span>):</span>
+      <strong id="motionVal">-- m/s²</strong>
+    </div>
+    <div class="bar-bg">
+      <div class="bar-fill" id="motionBar"></div>
+    </div>
+    <div class="metric-row">
+      <span>Rotational Tilt Rate (Gyro):</span>
+      <strong id="gyroVal">-- °/s</strong>
+    </div>
+    <div class="metric-row">
+      <span>Detection Confidence:</span>
+      <strong id="confVal" class="ok">6-Axis Verified</strong>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>System Continuity Status</h2>
+    <div class="status-item"><span>MPU6050 (Accel + Gyro)</span><span class="ok" id="sensorStatus">✓ ACTIVE</span></div>
+    <div class="status-item"><span>Local Captive Portal</span><span class="ok">✓ ACTIVE (192.168.4.1)</span></div>
+    <div class="status-item"><span>External Internet / Cloud</span><span class="offline">✕ UNAVAILABLE (Bypassed)</span></div>
+    <div class="status-item"><span>Power Source</span><span class="ok">✓ LOCAL BACKUP</span></div>
+  </div>
+
+  <script>
+    setInterval(async () => {
+      try {
+        const res = await fetch('/status');
+        const data = await res.json();
+        document.getElementById('motionVal').innerText = data.motion.toFixed(2) + ' m/s²';
+        document.getElementById('peakAcc').innerText = data.peak.toFixed(2) + ' m/s²';
+        document.getElementById('gyroVal').innerText = data.gyro.toFixed(1) + ' °/s';
+        document.getElementById('stateTitle').innerText = 
+          data.state === 'EMERGENCY' ? '🚨 EARTHQUAKE DETECTED' : '⚠️ POST-QUAKE MONITORING (' + data.state + ')';
+        
+        const pct = Math.min(100, (data.motion / 6.0) * 100);
+        document.getElementById('motionBar').style.width = pct + '%';
+
+        const confEl = document.getElementById('confVal');
+        if (data.gyroConfirmed) {
+          confEl.innerText = 'HIGH (Accel + Gyro Confirmed)';
+          confEl.className = 'offline';
+        } else {
+          confEl.innerText = 'PRIMARY (Linear Accel)';
+          confEl.className = 'warn';
+        }
+
+        const sEl = document.getElementById('sensorStatus');
+        if (data.sensorOk) {
+          sEl.innerText = '✓ ACTIVE';
+          sEl.className = 'ok';
+        } else {
+          sEl.innerText = '⚠ SENSOR WIRE ERROR';
+          sEl.className = 'offline';
+        }
+      } catch (e) {}
+    }, 500);
+  </script>
+</body>
+</html>
+)rawliteral";
+
+// --- Web Server & Captive Portal Handlers ---
+void handleRoot() {
+  server.send(200, "text/html", EMERGENCY_HTML);
+}
+
+void handleStatus() {
+  String stateStr = (currentState == STATE_IDLE) ? "IDLE" :
+                    (currentState == STATE_VERIFYING) ? "VERIFYING" : "EMERGENCY";
+
+  String json = "{";
+  json += "\"state\":\"" + stateStr + "\",";
+  json += "\"motion\":" + String(currentAccel, 2) + ",";
+  json += "\"peak\":" + String(peakAccel, 2) + ",";
+  json += "\"gyro\":" + String(currentGyro, 1) + ",";
+  json += "\"gyroConfirmed\":" + String(gyroConfirmed ? "true" : "false") + ",";
+  json += "\"sensorOk\":" + String(sensorHealthy ? "true" : "false");
+  json += "}";
+
+  server.send(200, "application/json", json);
+}
+
+void startEmergencyNetwork() {
+  if (emergencyNetworkStarted) return;
+
+  Serial.println("\n[NETWORK] Spinning up offline Emergency SoftAP + Captive Portal...");
+  WiFi.mode(WIFI_AP);
+  bool success = WiFi.softAP(AP_SSID); // Open network for instant captive portal popup
+
+  if (success) {
+    IPAddress apIP = WiFi.softAPIP();
+    Serial.println("✅ [NETWORK] Emergency Wi-Fi & Captive Portal ACTIVE!");
+    Serial.printf("   SSID: %s (Open Network) | URL: http://%s\n", AP_SSID, apIP.toString().c_str());
+
+    dnsServer.start(DNS_PORT, "*", apIP);
+
+    server.on("/", handleRoot);
+    server.on("/status", handleStatus);
+    server.on("/generate_204", handleRoot);
+    server.on("/gen_204", handleRoot);
+    server.on("/hotspot-detect.html", handleRoot);
+    server.on("/connecttest.txt", handleRoot);
+    server.on("/ncsi.txt", handleRoot);
+
+    server.onNotFound([]() {
+      server.sendHeader("Location", "http://192.168.4.1/", true);
+      server.send(302, "text/plain", "");
+    });
+
+    server.begin();
+    emergencyNetworkStarted = true;
+  }
+}
+
+// --- Step 4: Direct 14-Byte Register Read (Accel + Temp + Gyro) ---
+bool writeMPURegister(uint8_t reg, uint8_t val) {
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(reg);
+  Wire.write(val);
+  return (Wire.endTransmission() == 0);
+}
+
+bool readSensor(float &ax, float &ay, float &az, float &gx, float &gy, float &gz) {
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x3B); // Start at ACCEL_XOUT_H
+  if (Wire.endTransmission(false) != 0) return false;
+
+  // Request all 14 contiguous bytes (6 Accel + 2 Temp + 6 Gyro)
+  Wire.requestFrom(MPU_ADDR, (uint8_t)14, (uint8_t)true);
+  if (Wire.available() < 14) return false;
+
+  int16_t rawAx = (Wire.read() << 8) | Wire.read();
+  int16_t rawAy = (Wire.read() << 8) | Wire.read();
+  int16_t rawAz = (Wire.read() << 8) | Wire.read();
+
+  // Discard 2 temperature bytes (0x41 & 0x42)
+  Wire.read();
+  Wire.read();
+
+  int16_t rawGx = (Wire.read() << 8) | Wire.read();
+  int16_t rawGy = (Wire.read() << 8) | Wire.read();
+  int16_t rawGz = (Wire.read() << 8) | Wire.read();
+
+  // Convert Accelerometer (+/- 4g -> 8192 LSB/g) to m/s^2
+  ax = (rawAx / 8192.0) * 9.80665;
+  ay = (rawAy / 8192.0) * 9.80665;
+  az = (rawAz / 8192.0) * 9.80665;
+
+  // Convert Gyroscope (+/- 500 deg/s -> 65.5 LSB/deg/s) to deg/s
+  gx = rawGx / 65.5;
+  gy = rawGy / 65.5;
+  gz = rawGz / 65.5;
+
+  return true;
+}
+
+// --- Step 9: Calibrate Both Accelerometer and Gyroscope Baselines ---
+void calibrateSensor() {
+  Serial.println("Calibrating 6-axis baseline... Keep the sensor completely still.");
+  const int numSamples = 100;
+  float sumAx = 0, sumAy = 0, sumAz = 0;
+  float sumGx = 0, sumGy = 0, sumGz = 0;
+  int validSamples = 0;
+
+  while (validSamples < numSamples) {
+    float ax, ay, az, gx, gy, gz;
+    if (readSensor(ax, ay, az, gx, gy, gz)) {
+      sumAx += ax; sumAy += ay; sumAz += az;
+      sumGx += gx; sumGy += gy; sumGz += gz;
+      validSamples++;
+    }
+    delay(10);
+  }
+
+  baseAx = sumAx / numSamples;
+  baseAy = sumAy / numSamples;
+  baseAz = sumAz / numSamples;
+
+  baseGx = sumGx / numSamples;
+  baseGy = sumGy / numSamples;
+  baseGz = sumGz / numSamples;
+
+  Serial.printf("Accel Baseline -> X: %.2f, Y: %.2f, Z: %.2f m/s^2\n", baseAx, baseAy, baseAz);
+  Serial.printf("Gyro Baseline  -> X: %.2f, Y: %.2f, Z: %.2f deg/s\n", baseGx, baseGy, baseGz);
+}
+
+// --- Steps 6, 7 & 9: Compute Filtered Accel & Gyro Magnitudes ---
+void updateFilteredTelemetry() {
+  float ax, ay, az, gx, gy, gz;
+  if (readSensor(ax, ay, az, gx, gy, gz)) {
+    sensorHealthy = true;
+
+    // 1. Linear acceleration deviation from gravity baseline
+    float dax = ax - baseAx;
+    float day = ay - baseAy;
+    float daz = az - baseAz;
+    float rawAccelMag = sqrt(dax * dax + day * day + daz * daz);
+
+    // 2. Rotational velocity deviation from resting gyro bias
+    float dgx = gx - baseGx;
+    float dgy = gy - baseGy;
+    float dgz = gz - baseGz;
+    float rawGyroMag = sqrt(dgx * dgx + dgy * dgy + dgz * dgz);
+
+    accelBuffer[bufferIndex] = rawAccelMag;
+    gyroBuffer[bufferIndex]  = rawGyroMag;
+    bufferIndex = (bufferIndex + 1) % FILTER_SIZE;
+  } else {
+    sensorHealthy = false;
+    Serial.println("[WARNING] I2C Read Missed - Check loose SDA/SCL pins!");
+  }
+
+  float sumA = 0.0, sumG = 0.0;
+  for (int i = 0; i < FILTER_SIZE; i++) {
+    sumA += accelBuffer[i];
+    sumG += gyroBuffer[i];
+  }
+  currentAccel = sumA / FILTER_SIZE;
+  currentGyro  = sumG / FILTER_SIZE;
+
+  if (currentAccel > peakAccel) peakAccel = currentAccel;
+  if (currentGyro > peakGyro)   peakGyro  = currentGyro;
+}
+
+// --- Steps 11 & 12: State Machine with Gyro Confidence Confirmation ---
+void updateStateMachine(float accelMotion, float gyroMotion) {
+  unsigned long now = millis();
+
+  bool accelTriggered = (accelMotion >= MOTION_THRESHOLD);
+  bool gyroTriggered  = (gyroMotion >= GYRO_THRESHOLD);
+
+  switch (currentState) {
+    case STATE_IDLE:
+      digitalWrite(LED_PIN, LOW);
+      noTone(BUZZER_PIN);
+      digitalWrite(BUZZER_PIN, LOW);
+
+      if (accelTriggered) {
+        currentState = STATE_VERIFYING;
+        verifyStartTime = now;
+        gyroConfirmed = gyroTriggered;
+        Serial.println("[STATE] IDLE -> VERIFYING (Abnormal motion detected...)");
+      }
+      break;
+
+    case STATE_VERIFYING:
+      digitalWrite(LED_PIN, (now / 100) % 2);
+      if (gyroTriggered) gyroConfirmed = true; // Latch if gyro agrees during verification
+
+      // If both Accel + Gyro agree, confirm faster (700ms); otherwise require full 1000ms
+      unsigned long requiredDuration = gyroConfirmed ? 700 : VERIFY_DURATION;
+
+      if (!accelTriggered) {
+        currentState = STATE_IDLE;
+        Serial.println("[STATE] VERIFYING -> IDLE (Transient spike ignored)");
+      } 
+      else if (now - verifyStartTime >= requiredDuration) {
+        currentState = STATE_EMERGENCY;
+        emergencyStartTime = now;
+        Serial.println("==========================================");
+        Serial.printf("🚨 [STATE] EARTHQUAKE DETECTED! (6-Axis Gyro Confirmed: %s)\n", 
+                      gyroConfirmed ? "YES" : "LINEAR ONLY");
+        Serial.println("==========================================");
+        
+        startEmergencyNetwork();
+      }
+      break;
+
+    case STATE_EMERGENCY:
+      digitalWrite(LED_PIN, HIGH);
+      if (gyroTriggered) gyroConfirmed = true;
+
+      if ((now / 250) % 2 == 0) {
+        tone(BUZZER_PIN, 2500);
+      } else {
+        tone(BUZZER_PIN, 1800);
+      }
+
+      if (now - emergencyStartTime >= EMERGENCY_COOLDOWN && !accelTriggered) {
+        currentState = STATE_IDLE;
+        noTone(BUZZER_PIN);
+        digitalWrite(BUZZER_PIN, LOW);
+        Serial.println("[STATE] EMERGENCY -> IDLE (Alarm silenced, Captive Portal remains active)");
+      }
+      break;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+  digitalWrite(BUZZER_PIN, LOW);
+
+  WiFi.mode(WIFI_OFF);
+
+  Serial.println("\n=== SEISMICSENSE: 6-AXIS SENSOR FUSION + PORTAL ===");
+  Wire.begin(I2C_SDA, I2C_SCL);
+  Wire.setTimeOut(100);
+
+  if (!writeMPURegister(0x6B, 0x00)) {
+    Serial.println("ERROR: MPU chip not responding at 0x68! Waiting for connection...");
+    while (!writeMPURegister(0x6B, 0x00)) {
+      digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+      delay(500);
+    }
+  }
