@@ -1,5 +1,6 @@
 # SeismicSense
 **Technathon Fall 2026 Project**
+Alex Ma, Fiyin Oladeji, Fiyin Oladeji
 
 **Overview**
 
