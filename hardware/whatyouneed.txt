@@ -12,7 +12,7 @@ Jumper Wires (MF, FF, MM)
 220 Ohm Resistor x2
 2N2222 Transistor x2
 Breadboard PSU x2
-9V Battery Snap Connector
+9V Battery Snap Connector x2
 
 Solder Station (Optional)
 
