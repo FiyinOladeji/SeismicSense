@@ -14,5 +14,7 @@ NNPN 2222 Transistor x2
 Breadboard PSU x2
 9V Battery Snap Connector
 
+Solder Station (Optional)
+
 Software:
 Arduino IDE
