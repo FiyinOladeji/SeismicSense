@@ -1,0 +1,30 @@
+#include <WiFi.h>
+
+const char* AP_NAME = "Seismic-Guardian";
+const char* AP_PASSWORD = "Guardian123";
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+
+  WiFi.mode(WIFI_AP);
+
+  bool started = WiFi.softAP(
+    AP_NAME,
+    AP_PASSWORD
+  );
+
+  if (started) {
+    Serial.println("Wi-Fi access point started!");
+    Serial.print("Network: ");
+    Serial.println(AP_NAME);
+
+    Serial.print("IP address: ");
+    Serial.println(WiFi.softAPIP());
+  } else {
+    Serial.println("Failed to start access point.");
+  }
+}
+
+void loop() {
+}
