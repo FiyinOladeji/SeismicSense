@@ -1,0 +1,50 @@
+#include <WiFi.h>
+#include <WebServer.h>
+
+const char* AP_NAME = "Seismic-Guardian";
+const char* AP_PASSWORD = "Guardian123";
+
+WebServer server(80);
+
+void handleHome() {
+  String page = R"HTML(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1">
+  <title>Seismic Guardian</title>
+</head>
+<body style="font-family:Arial;text-align:center;
+             padding:24px;background:#f3f4f6;">
+  <h1>Seismic Guardian</h1>
+  <h2>System Connected</h2>
+  <p>Your phone is communicating directly
+     with the ESP32.</p>
+  <p>This page is being served locally.</p>
+</body>
+</html>
+)HTML";
+
+  server.send(200, "text/html", page);
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(AP_NAME, AP_PASSWORD);
+
+  Serial.print("Open this address: http://");
+  Serial.println(WiFi.softAPIP());
+
+  server.on("/", HTTP_GET, handleHome);
+
+  server.begin();
+  Serial.println("Web server started.");
+}
+
+void loop() {
+  server.handleClient();
+}
+
