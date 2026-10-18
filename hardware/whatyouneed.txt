@@ -10,7 +10,7 @@ Data Cable x2
 Jumper Wires (MF, FF, MM)
 1K Ohm Resistor x2
 220 Ohm Resistor x2
-NNPN 2222 Transistor x2
+2N2222 Transistor x2
 Breadboard PSU x2
 9V Battery Snap Connector
 
