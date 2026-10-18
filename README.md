@@ -16,3 +16,5 @@ The ESP32 also is connected to a local network of other SeismicSense's conversin
 Earthquake early warnings may provide little or no lead time near an earthquake's source. Earthquakes can also disrupt electrical power, cellular networks, internet access, and cloud services.
 
 SeismicSense explores how a locally operating device can continue providing essential information without relying on those external services.
+
+DUE DATE: 10/18/2026
