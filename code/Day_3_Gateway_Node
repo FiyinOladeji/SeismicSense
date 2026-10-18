@@ -1,1 +1,500 @@
+#include <Wire.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <DNSServer.h>
+#include <esp_now.h>
+#include <esp_wifi.h>
+#include <math.h>
 
+// --- Gateway Configuration (Gateway is Sensor Node #1) ---
+#define GATEWAY_NODE_ID 1
+const char* AP_SSID = "SeismicSense";
+const uint8_t WIFI_CHANNEL = 1; // MUST match Remote Nodes!
+const byte DNS_PORT = 53;
+uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+WebServer server(80);
+DNSServer dnsServer;
+esp_now_peer_info_t peerInfo;
+bool emergencyNetworkStarted = false;
+
+// --- Identical Hardware Pins Across All Nodes ---
+const uint8_t MPU_ADDR = 0x68; 
+const int I2C_SDA = 21;
+const int I2C_SCL = 22;
+const int LED_PIN = 2;      // External LED (+ onboard LED)
+const int BUZZER_PIN = 4;   // Transistor-driven buzzer
+
+// --- Tunable Thresholds ---
+const float MOTION_THRESHOLD = 1.5;             // m/s^2
+const float GYRO_THRESHOLD = 15.0;              // deg/s
+const unsigned long VERIFY_DURATION = 800;      // Local node verify time
+const unsigned long SINGLE_NODE_FALLBACK = 2000;// If 1 node shakes hard for 2s, still trigger!
+const unsigned long EMERGENCY_COOLDOWN = 15000; // 15s latch
+
+enum SystemState { STATE_IDLE = 0, STATE_VERIFYING = 1, STATE_EMERGENCY = 2 };
+SystemState gatewayState = STATE_IDLE;
+SystemState localNodeState = STATE_IDLE;
+
+// --- ESP-NOW Packet Structure (Matches Remote Nodes) ---
+typedef struct SensorMessage {
+  uint8_t nodeID;
+  uint8_t state;
+  float acceleration;
+  float gyro;
+  bool sensorHealthy;
+  bool globalEmergency;
+} SensorMessage;
+
+struct NodeStatus {
+  bool online;
+  uint8_t state;
+  float accel;
+  float gyro;
+  bool sensorOk;
+  unsigned long lastSeen;
+};
+
+NodeStatus nodes[4]; // Index 1 = Node 1 (GW), 2 = Node 2, 3 = Node 3
+int activeAlertNodes = 0;
+
+float baseAx = 0, baseAy = 0, baseAz = 0;
+float baseGx = 0, baseGy = 0, baseGz = 0;
+float peakAccel = 0;
+
+const int FILTER_SIZE = 5;
+float accelBuffer[FILTER_SIZE] = {0.0};
+float gyroBuffer[FILTER_SIZE] = {0.0};
+int bufferIndex = 0;
+
+unsigned long localVerifyStart = 0;
+unsigned long emergencyStartTime = 0;
+unsigned long lastSampleTime = 0;
+unsigned long lastPrintTime = 0;
+
+#if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
+void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *incomingData, int len) {
+#else
+void OnDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
+#endif
+  if (len == sizeof(SensorMessage)) {
+    SensorMessage msg;
+    memcpy(&msg, incomingData, sizeof(msg));
+
+    if (msg.nodeID >= 2 && msg.nodeID <= 3) {
+      nodes[msg.nodeID].online = true;
+      nodes[msg.nodeID].state = msg.state;
+      nodes[msg.nodeID].accel = msg.acceleration;
+      nodes[msg.nodeID].gyro = msg.gyro;
+      nodes[msg.nodeID].sensorOk = msg.sensorHealthy;
+      nodes[msg.nodeID].lastSeen = millis();
+
+      if (msg.acceleration > peakAccel) {
+        peakAccel = msg.acceleration;
+      }
+    }
+  }
+}
+
+const char EMERGENCY_HTML[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SeismicSense — Distributed Mesh Portal</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: #111827; color: #f9fafb; padding: 14px; max-width: 480px; margin: 0 auto; }
+    .banner { background: #dc2626; color: white; padding: 16px; border-radius: 12px; text-align: center; margin-bottom: 14px; box-shadow: 0 4px 15px rgba(220,38,38,0.5); animation: pulse 1.5s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.85; } }
+    .banner h1 { font-size: 1.4rem; margin-bottom: 4px; }
+    .banner p { font-size: 0.9rem; font-weight: 700; color: #fef08a; }
+    .card { background: #1f2937; border: 1px solid #374151; border-radius: 12px; padding: 14px; margin-bottom: 12px; }
+    .card h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px; color: #9ca3af; margin-bottom: 10px; }
+    .action-step { display: flex; align-items: center; background: #111827; padding: 10px 12px; border-radius: 8px; margin-bottom: 6px; border-left: 4px solid #f59e0b; font-weight: 700; font-size: 1.05rem; }
+    .action-step span { color: #f59e0b; margin-right: 12px; font-size: 1.2rem; }
+    .node-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px; }
+    .node-box { background: #111827; border: 1px solid #374151; border-radius: 8px; padding: 10px 6px; text-align: center; }
+    .node-box.alert { border-color: #ef4444; background: rgba(239,68,68,0.18); }
+    .node-title { font-size: 0.78rem; color: #9ca3af; font-weight: 700; }
+    .node-val { font-size: 1.05rem; font-weight: 800; margin: 4px 0; }
+    .node-badge { font-size: 0.72rem; padding: 2px 6px; border-radius: 4px; font-weight: 700; display: inline-block; }
+    .bg-red { background: #ef4444; color: white; }
+    .bg-green { background: #059669; color: white; }
+    .bg-gray { background: #4b5563; color: #d1d5db; }
+    .status-item { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #374151; font-size: 0.88rem; }
+    .status-item:last-child { border-bottom: none; }
+    .ok { color: #34d399; font-weight: 600; }
+    .offline { color: #f87171; font-weight: 600; }
+  </style>
+</head>
+<body>
+
+  <div class="banner">
+    <h1 id="stateTitle">🚨 EARTHQUAKE DETECTED</h1>
+    <p id="consensusText">DISTRIBUTED SENSOR CONSENSUS ACTIVE</p>
+  </div>
+
+  <div class="card">
+    <h2>Immediate Action Required</h2>
+    <div class="action-step"><span>1</span> DROP to your hands and knees</div>
+    <div class="action-step"><span>2</span> COVER your head and neck under shelter</div>
+    <div class="action-step"><span>3</span> HOLD ON until all shaking stops</div>
+  </div>
+
+  <div class="card">
+    <h2>ESP-NOW Structural Sensor Array (Peak: <span id="peakVal">--</span> m/s²)</h2>
+    <div class="node-grid">
+      <div class="node-box" id="n1Box">
+        <div class="node-title">NODE 1 (GW)</div>
+        <div class="node-val" id="n1Acc">-- m/s²</div>
+        <div class="node-badge bg-green" id="n1State">IDLE</div>
+      </div>
+      <div class="node-box" id="n2Box">
+        <div class="node-title">NODE 2</div>
+        <div class="node-val" id="n2Acc">-- m/s²</div>
+        <div class="node-badge bg-gray" id="n2State">OFFLINE</div>
+      </div>
+      <div class="node-box" id="n3Box">
+        <div class="node-title">NODE 3</div>
+        <div class="node-val" id="n3Acc">-- m/s²</div>
+        <div class="node-badge bg-gray" id="n3State">OFFLINE</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>System Continuity Status</h2>
+    <div class="status-item"><span>ESP-NOW Mesh Link</span><span class="ok">✓ ACTIVE (Ch 1)</span></div>
+    <div class="status-item"><span>Local Captive Portal</span><span class="ok">✓ ACTIVE (192.168.4.1)</span></div>
+    <div class="status-item"><span>External Internet / Cloud</span><span class="offline">✕ UNAVAILABLE (Bypassed)</span></div>
+  </div>
+
+  <script>
+    function updateNodeUI(idx, node) {
+      const box = document.getElementById('n' + idx + 'Box');
+      const acc = document.getElementById('n' + idx + 'Acc');
+      const st  = document.getElementById('n' + idx + 'State');
+      if (!node.online) {
+        box.className = 'node-box';
+        acc.innerText = '-- m/s²';
+        st.className = 'node-badge bg-gray';
+        st.innerText = 'OFFLINE';
+        return;
+      }
+      acc.innerText = node.accel.toFixed(2) + ' m/s²';
+      if (node.state >= 1) {
+        box.className = 'node-box alert';
+        st.className = 'node-badge bg-red';
+        st.innerText = node.state === 2 ? 'EMERGENCY' : 'VERIFYING';
+      } else {
+        box.className = 'node-box';
+        st.className = 'node-badge bg-green';
+        st.innerText = 'NORMAL';
+      }
+    }
+
+    setInterval(async () => {
+      try {
+        const res = await fetch('/status');
+        const data = await res.json();
+        document.getElementById('peakVal').innerText = data.peak.toFixed(2);
+        document.getElementById('consensusText').innerText = 
+          data.alertNodes + ' OF ' + data.onlineNodes + ' STRUCTURAL NODES REPORTING MOTION';
+        updateNodeUI(1, data.n1);
+        updateNodeUI(2, data.n2);
+        updateNodeUI(3, data.n3);
+      } catch (e) {}
+    }, 400);
+  </script>
+</body>
+</html>
+)rawliteral";
+
+void handleRoot() {
+  server.send(200, "text/html", EMERGENCY_HTML);
+}
+
+String nodeToJson(int id) {
+  bool isOnline = (id == 1) || (nodes[id].online && (millis() - nodes[id].lastSeen < 3000));
+  String s = "{";
+  s += "\"online\":" + String(isOnline ? "true" : "false") + ",";
+  s += "\"state\":" + String(nodes[id].state) + ",";
+  s += "\"accel\":" + String(nodes[id].accel, 2) + ",";
+  s += "\"gyro\":" + String(nodes[id].gyro, 1);
+  s += "}";
+  return s;
+}
+
+void handleStatus() {
+  int onlineCount = 1;
+  if (nodes[2].online && (millis() - nodes[2].lastSeen < 3000)) onlineCount++;
+  if (nodes[3].online && (millis() - nodes[3].lastSeen < 3000)) onlineCount++;
+
+  String json = "{";
+  json += "\"peak\":" + String(peakAccel, 2) + ",";
+  json += "\"alertNodes\":" + String(activeAlertNodes) + ",";
+  json += "\"onlineNodes\":" + String(onlineCount) + ",";
+  json += "\"n1\":" + nodeToJson(1) + ",";
+  json += "\"n2\":" + nodeToJson(2) + ",";
+  json += "\"n3\":" + nodeToJson(3);
+  json += "}";
+
+  server.send(200, "application/json", json);
+}
+
+void startEmergencyNetwork() {
+  if (emergencyNetworkStarted) return;
+
+  Serial.println("\n[GATEWAY] Launching SoftAP on Channel 1 (Keeping ESP-NOW Alive)...");
+  WiFi.mode(WIFI_AP_STA);
+  bool success = WiFi.softAP(AP_SSID, NULL, WIFI_CHANNEL);
+
+  if (success) {
+    IPAddress apIP = WiFi.softAPIP();
+    Serial.printf("✅ [GATEWAY] Captive Portal LIVE at http://%s (Channel %d)\n", apIP.toString().c_str(), WIFI_CHANNEL);
+
+    dnsServer.start(DNS_PORT, "*", apIP);
+    server.on("/", handleRoot);
+    server.on("/status", handleStatus);
+    server.on("/generate_204", handleRoot);
+    server.on("/gen_204", handleRoot);
+    server.on("/hotspot-detect.html", handleRoot);
+    server.on("/connecttest.txt", handleRoot);
+    server.on("/ncsi.txt", handleRoot);
+
+    server.onNotFound([]() {
+      server.sendHeader("Location", "http://192.168.4.1/", true);
+      server.send(302, "text/plain", "");
+    });
+
+    server.begin();
+    emergencyNetworkStarted = true;
+  }
+}
+
+bool writeMPURegister(uint8_t reg, uint8_t val) {
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(reg);
+  Wire.write(val);
+  return (Wire.endTransmission() == 0);
+}
+
+bool readSensor(float &ax, float &ay, float &az, float &gx, float &gy, float &gz) {
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x3B);
+  if (Wire.endTransmission(false) != 0) return false;
+
+  Wire.requestFrom(MPU_ADDR, (uint8_t)14, (uint8_t)true);
+  if (Wire.available() < 14) return false;
+
+  int16_t rawAx = (Wire.read() << 8) | Wire.read();
+  int16_t rawAy = (Wire.read() << 8) | Wire.read();
+  int16_t rawAz = (Wire.read() << 8) | Wire.read();
+  Wire.read(); Wire.read();
+  int16_t rawGx = (Wire.read() << 8) | Wire.read();
+  int16_t rawGy = (Wire.read() << 8) | Wire.read();
+  int16_t rawGz = (Wire.read() << 8) | Wire.read();
+
+  ax = (rawAx / 8192.0) * 9.80665;
+  ay = (rawAy / 8192.0) * 9.80665;
+  az = (rawAz / 8192.0) * 9.80665;
+  gx = rawGx / 65.5;
+  gy = rawGy / 65.5;
+  gz = rawGz / 65.5;
+  return true;
+}
+
+void calibrateSensor() {
+  Serial.println("[GATEWAY NODE 1] Calibrating 6-axis baseline...");
+  float sumAx = 0, sumAy = 0, sumAz = 0, sumGx = 0, sumGy = 0, sumGz = 0;
+  int valid = 0;
+  while (valid < 100) {
+    float ax, ay, az, gx, gy, gz;
+    if (readSensor(ax, ay, az, gx, gy, gz)) {
+      sumAx += ax; sumAy += ay; sumAz += az;
+      sumGx += gx; sumGy += gy; sumGz += gz;
+      valid++;
+    }
+    delay(10);
+  }
+  baseAx = sumAx / 100.0; baseAy = sumAy / 100.0; baseAz = sumAz / 100.0;
+  baseGx = sumGx / 100.0; baseGy = sumGy / 100.0; baseGz = sumGz / 100.0;
+  Serial.println("[GATEWAY NODE 1] Baseline Locked!");
+}
+
+void updateLocalNode1() {
+  unsigned long now = millis();
+  float ax, ay, az, gx, gy, gz;
+  if (readSensor(ax, ay, az, gx, gy, gz)) {
+    nodes[1].sensorOk = true;
+    float dax = ax - baseAx, day = ay - baseAy, daz = az - baseAz;
+    float dgx = gx - baseGx, dgy = gy - baseGy, dgz = gz - baseGz;
+    accelBuffer[bufferIndex] = sqrt(dax*dax + day*day + daz*daz);
+    gyroBuffer[bufferIndex]  = sqrt(dgx*dgx + dgy*dgy + dgz*dgz);
+    bufferIndex = (bufferIndex + 1) % FILTER_SIZE;
+  } else {
+    nodes[1].sensorOk = false;
+  }
+
+  float sumA = 0, sumG = 0;
+  for (int i = 0; i < FILTER_SIZE; i++) {
+    sumA += accelBuffer[i];
+    sumG += gyroBuffer[i];
+  }
+  nodes[1].online = true;
+  nodes[1].accel = sumA / FILTER_SIZE;
+  nodes[1].gyro  = sumG / FILTER_SIZE;
+  nodes[1].lastSeen = now;
+  if (nodes[1].accel > peakAccel) peakAccel = nodes[1].accel;
+
+  bool triggered = (nodes[1].accel >= MOTION_THRESHOLD);
+  if (localNodeState == STATE_IDLE && triggered) {
+    localNodeState = STATE_VERIFYING;
+    localVerifyStart = now;
+  } else if (localNodeState == STATE_VERIFYING) {
+    if (!triggered) localNodeState = STATE_IDLE;
+    else if (now - localVerifyStart >= VERIFY_DURATION) localNodeState = STATE_EMERGENCY;
+  } else if (localNodeState == STATE_EMERGENCY && !triggered) {
+    if (now - localVerifyStart >= 5000) localNodeState = STATE_IDLE;
+  }
+  nodes[1].state = (uint8_t)localNodeState;
+}
+
+void broadcastGlobalEmergencySync() {
+  SensorMessage syncMsg;
+  syncMsg.nodeID = 1;
+  syncMsg.state = STATE_EMERGENCY;
+  syncMsg.acceleration = nodes[1].accel;
+  syncMsg.gyro = nodes[1].gyro;
+  syncMsg.sensorHealthy = nodes[1].sensorOk;
+  syncMsg.globalEmergency = true;
+  esp_now_send(broadcastAddress, (uint8_t *)&syncMsg, sizeof(syncMsg));
+}
+
+void evaluateMultiNodeConsensus() {
+  unsigned long now = millis();
+  int verifyingOrEmergencyCount = 0;
+  int confirmedEmergencyCount = 0;
+
+  for (int i = 1; i <= 3; i++) {
+    bool fresh = (i == 1) || (nodes[i].online && (now - nodes[i].lastSeen < 2500));
+    if (fresh) {
+      if (nodes[i].state >= STATE_VERIFYING) verifyingOrEmergencyCount++;
+      if (nodes[i].state == STATE_EMERGENCY) confirmedEmergencyCount++;
+    }
+  }
+  activeAlertNodes = verifyingOrEmergencyCount;
+
+  bool consensusEmergency = (verifyingOrEmergencyCount >= 2 && confirmedEmergencyCount >= 1) ||
+                            (confirmedEmergencyCount >= 1 && (now - localVerifyStart >= SINGLE_NODE_FALLBACK));
+
+  switch (gatewayState) {
+    case STATE_IDLE:
+      digitalWrite(LED_PIN, LOW);
+      noTone(BUZZER_PIN);
+      digitalWrite(BUZZER_PIN, LOW);
+      if (consensusEmergency) {
+        gatewayState = STATE_EMERGENCY;
+        emergencyStartTime = now;
+        Serial.println("=====================================================");
+        Serial.printf("🚨 [GATEWAY CONSENSUS] EARTHQUAKE CONFIRMED (%d NODES)!\n", activeAlertNodes);
+        Serial.println("=====================================================");
+        startEmergencyNetwork();
+      } else if (verifyingOrEmergencyCount == 1) {
+        gatewayState = STATE_VERIFYING;
+      }
+      break;
+
+    case STATE_VERIFYING:
+      digitalWrite(LED_PIN, (now / 100) % 2);
+      if (consensusEmergency) {
+        gatewayState = STATE_EMERGENCY;
+        emergencyStartTime = now;
+        Serial.println("=====================================================");
+        Serial.printf("🚨 [GATEWAY CONSENSUS] EARTHQUAKE CONFIRMED (%d NODES)!\n", activeAlertNodes);
+        Serial.println("=====================================================");
+        startEmergencyNetwork();
+      } else if (verifyingOrEmergencyCount == 0) {
+        gatewayState = STATE_IDLE;
+      }
+      break;
+
+    case STATE_EMERGENCY:
+      digitalWrite(LED_PIN, HIGH);
+      if ((now / 250) % 2 == 0) tone(BUZZER_PIN, 2500);
+      else tone(BUZZER_PIN, 1800);
+
+      if (now - emergencyStartTime >= EMERGENCY_COOLDOWN && verifyingOrEmergencyCount == 0) {
+        gatewayState = STATE_IDLE;
+        noTone(BUZZER_PIN);
+        digitalWrite(BUZZER_PIN, LOW);
+      }
+      break;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+  digitalWrite(BUZZER_PIN, LOW);
+
+  Serial.println("\n=== SEISMICSENSE: GATEWAY (NODE 1) + ESP-NOW MESH ===");
+  Wire.begin(I2C_SDA, I2C_SCL);
+  Wire.setTimeOut(100);
+
+  while (!writeMPURegister(0x6B, 0x00)) {
+    Serial.println("Waiting for Gateway MPU6050...");
+    digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+    delay(500);
+  }
+  writeMPURegister(0x1C, 0x08);
+  writeMPURegister(0x1B, 0x08);
+  writeMPURegister(0x1A, 0x04);
+  calibrateSensor();
+
+  WiFi.mode(WIFI_STA);
+  esp_wifi_set_promiscuous(true);
+  esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE);
+  esp_wifi_set_promiscuous(false);
+
+  if (esp_now_init() == ESP_OK) {
+    esp_now_register_recv_cb(OnDataRecv);
+    memcpy(peerInfo.peer_addr, broadcastAddress, 6);
+    peerInfo.channel = WIFI_CHANNEL;
+    peerInfo.encrypt = false;
+    esp_now_add_peer(&peerInfo);
+    Serial.println("✅ [ESP-NOW] Gateway bidirectional mesh active on Channel 1!");
+  }
+}
+
+void loop() {
+  unsigned long now = millis();
+
+  if (now - lastSampleTime >= 20) {
+    lastSampleTime = now;
+    updateLocalNode1();
+    evaluateMultiNodeConsensus();
+
+    if (now - lastPrintTime >= 250) {
+      lastPrintTime = now;
+      if (gatewayState == STATE_EMERGENCY) {
+        broadcastGlobalEmergencySync(); // Tell Nodes 2 & 3 to sound their alarms too!
+      }
+      Serial.printf("GW State: %d | N1: %.2f(S:%d) | N2: %.2f(S:%d) | N3: %.2f(S:%d)\n",
+                    gatewayState,
+                    nodes[1].accel, nodes[1].state,
+                    nodes[2].online ? nodes[2].accel : 0.0, nodes[2].state,
+                    nodes[3].online ? nodes[3].accel : 0.0, nodes[3].state);
+    }
+  }
+
+  if (emergencyNetworkStarted) {
+    dnsServer.processNextRequest();
+    server.handleClient();
+  }
+}
