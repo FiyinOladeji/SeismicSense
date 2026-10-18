@@ -1,0 +1,17 @@
+Workable Computer/Laptop Device
+ESP32 x2
+Breadboard x2
+9V Battery x2
+TMB12A05 Buzzer x2
+MPU6050 x2
+LED x2
+Data Cable x2
+Jumper Wires (MF, FF, MM)
+1K Ohm Resistor x2
+220 Ohm Resistor x2
+NNPN 2222 Transistor x2
+Breadboard PSU x2
+9V Battery Snap Connector
+
+Software:
+Arduino IDE
