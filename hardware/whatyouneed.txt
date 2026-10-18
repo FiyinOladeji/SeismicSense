@@ -1,5 +1,5 @@
 Hardware:
-Workable Computer/Laptop Device
+Programmable Computer/Laptop Device
 ESP32 x2
 Breadboard x2
 9V Battery x2
