@@ -102,96 +102,179 @@ const char EMERGENCY_HTML[] PROGMEM = R"rawliteral(
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SeismicSense — Distributed Mesh Portal</title>
+  <title>Seismic Sense — Earth Kingdom Emergency Network</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-    body { background: #111827; color: #f9fafb; padding: 14px; max-width: 480px; margin: 0 auto; }
-    .banner { background: #dc2626; color: white; padding: 16px; border-radius: 12px; text-align: center; margin-bottom: 14px; box-shadow: 0 4px 15px rgba(220,38,38,0.5); animation: pulse 1.5s infinite; }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.85; } }
-    .banner h1 { font-size: 1.4rem; margin-bottom: 4px; }
-    .banner p { font-size: 0.9rem; font-weight: 700; color: #fef08a; }
-    .card { background: #1f2937; border: 1px solid #374151; border-radius: 12px; padding: 14px; margin-bottom: 12px; }
-    .card h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px; color: #9ca3af; margin-bottom: 10px; }
-    .action-step { display: flex; align-items: center; background: #111827; padding: 10px 12px; border-radius: 8px; margin-bottom: 6px; border-left: 4px solid #f59e0b; font-weight: 700; font-size: 1.05rem; }
-    .action-step span { color: #f59e0b; margin-right: 12px; font-size: 1.2rem; }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: "Trebuchet MS", -apple-system, BlinkMacSystemFont, sans-serif; }
+    body { 
+      background-color: #080c09;
+      background-image: radial-gradient(circle at 50% 15%, rgba(16, 185, 129, 0.14) 0%, transparent 65%);
+      color: #ecfdf5; padding: 14px; max-width: 480px; margin: 0 auto; 
+    }
+    
+    /* Toph Seismic Sense Sonar Header */
+    .banner { 
+      position: relative; overflow: hidden;
+      background: #0f1912; border: 2px solid #10b981; color: #ecfdf5; 
+      padding: 18px 14px; border-radius: 12px; text-align: center; margin-bottom: 14px; 
+      box-shadow: 0 0 22px rgba(16, 185, 129, 0.35), inset 0 0 15px rgba(16, 185, 129, 0.15);
+    }
+    .banner.alert-mode {
+      border-color: #eab308;
+      box-shadow: 0 0 28px rgba(234, 179, 8, 0.5), inset 0 0 20px rgba(220, 38, 38, 0.3);
+      animation: tremorShake 1.2s infinite;
+    }
+    @keyframes tremorShake {
+      0%, 100% { transform: translate(0, 0); }
+      25% { transform: translate(-1px, 1px); }
+      75% { transform: translate(1px, -1px); }
+    }
+
+    /* Expanding Seismic Sonar Rings */
+    .sonar-wrap { position: relative; width: 64px; height: 64px; margin: 0 auto 10px; display: flex; align-items: center; justify-content: center; }
+    .sonar-ring {
+      position: absolute; border: 2px solid #10b981; border-radius: 50%;
+      width: 100%; height: 100%; opacity: 0;
+      animation: sonarWave 2.4s cubic-bezier(0.1, 0.5, 0.3, 1) infinite;
+    }
+    .sonar-ring.r2 { animation-delay: 0.8s; }
+    .sonar-ring.r3 { animation-delay: 1.6s; }
+    @keyframes sonarWave {
+      0% { transform: scale(0.3); opacity: 0.95; }
+      100% { transform: scale(2.4); opacity: 0; }
+    }
+    .emblem-svg { width: 46px; height: 46px; z-index: 2; filter: drop-shadow(0 0 6px #10b981); }
+
+    .banner h1 { font-size: 1.3rem; letter-spacing: 1.5px; color: #eab308; text-transform: uppercase; margin-bottom: 4px; text-shadow: 0 0 10px rgba(234,179,8,0.4); }
+    .banner p { font-size: 0.82rem; font-weight: 700; color: #34d399; letter-spacing: 1px; }
+
+    .card { 
+      background: rgba(15, 25, 18, 0.92); border: 1px solid #1f3a29; 
+      border-radius: 12px; padding: 14px; margin-bottom: 12px; 
+      box-shadow: 0 4px 12px rgba(0,0,0,0.6);
+    }
+    .card h2 { 
+      font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1.5px; 
+      color: #eab308; margin-bottom: 10px; border-bottom: 1px solid #1f3a29; padding-bottom: 6px;
+    }
+
+    /* Earthbending Stance Directives */
+    .action-step { 
+      display: flex; align-items: center; background: #080c09; 
+      padding: 10px 12px; border-radius: 8px; margin-bottom: 7px; 
+      border-left: 4px solid #eab308; border-right: 1px solid #1f3a29;
+      font-weight: 700; font-size: 0.98rem; color: #fef9c3;
+    }
+    .action-step span { color: #10b981; margin-right: 12px; font-size: 1.2rem; font-weight: 900; }
+
+    /* 3-Node Tremor Grid */
     .node-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px; }
-    .node-box { background: #111827; border: 1px solid #374151; border-radius: 8px; padding: 10px 6px; text-align: center; }
-    .node-box.alert { border-color: #ef4444; background: rgba(239,68,68,0.18); }
-    .node-title { font-size: 0.78rem; color: #9ca3af; font-weight: 700; }
-    .node-val { font-size: 1.05rem; font-weight: 800; margin: 4px 0; }
-    .node-badge { font-size: 0.72rem; padding: 2px 6px; border-radius: 4px; font-weight: 700; display: inline-block; }
-    .bg-red { background: #ef4444; color: white; }
-    .bg-green { background: #059669; color: white; }
-    .bg-gray { background: #4b5563; color: #d1d5db; }
-    .status-item { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #374151; font-size: 0.88rem; }
+    .node-box { 
+      background: #080c09; border: 1px solid #1f3a29; border-radius: 8px; 
+      padding: 10px 5px; text-align: center; transition: all 0.25s ease;
+    }
+    .node-box.alert { 
+      border-color: #eab308; background: rgba(234, 179, 8, 0.14); 
+      box-shadow: 0 0 14px rgba(234, 179, 8, 0.35);
+    }
+    .node-title { font-size: 0.72rem; color: #a7f3d0; font-weight: 700; letter-spacing: 0.5px; }
+    .node-val { font-size: 1.05rem; font-weight: 800; margin: 5px 0; color: #ecfdf5; }
+    .node-gyro { font-size: 0.72rem; color: #6ee7b7; margin-bottom: 5px; }
+    .node-badge { font-size: 0.68rem; padding: 3px 6px; border-radius: 4px; font-weight: 800; display: inline-block; letter-spacing: 0.5px; }
+    .bg-quake { background: #dc2626; color: #fef08a; box-shadow: 0 0 8px #dc2626; }
+    .bg-calm { background: #065f46; color: #6ee7b7; border: 1px solid #10b981; }
+    .bg- severed { background: #374151; color: #9ca3af; }
+
+    .status-item { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #14261b; font-size: 0.85rem; }
     .status-item:last-child { border-bottom: none; }
-    .ok { color: #34d399; font-weight: 600; }
-    .offline { color: #f87171; font-weight: 600; }
+    .ok { color: #10b981; font-weight: 700; }
+    .gold { color: #eab308; font-weight: 700; }
+    .offline { color: #f87171; font-weight: 700; }
+    .quote { text-align: center; font-style: italic; font-size: 0.78rem; color: #6ee7b7; opacity: 0.85; margin-top: 6px; }
   </style>
 </head>
 <body>
 
-  <div class="banner">
-    <h1 id="stateTitle">🚨 EARTHQUAKE DETECTED</h1>
-    <p id="consensusText">DISTRIBUTED SENSOR CONSENSUS ACTIVE</p>
+  <div class="banner alert-mode" id="mainBanner">
+    <div class="sonar-wrap">
+      <div class="sonar-ring"></div>
+      <div class="sonar-ring r2"></div>
+      <div class="sonar-ring r3"></div>
+      <!-- Pure Inline SVG Earth Kingdom Emblem (Zero Internet Required) -->
+      <svg class="emblem-svg" viewBox="0 0 100 100">
+        <circle cx="50" cy="50" r="45" fill="#080c09" stroke="#eab308" stroke-width="5"/>
+        <circle cx="50" cy="50" r="35" fill="none" stroke="#10b981" stroke-width="2" stroke-dasharray="6 4"/>
+        <rect x="33" y="33" width="34" height="34" fill="none" stroke="#eab308" stroke-width="5"/>
+        <circle cx="50" cy="50" r="5" fill="#10b981"/>
+      </svg>
+    </div>
+    <h1 id="stateTitle">⚡ SEISMIC SENSE: TREMOR DETECTED</h1>
+    <p id="consensusText">TREMOR-SENSE MESH ACTIVE — FEELING REAL-TIME VIBRATIONS</p>
   </div>
 
   <div class="card">
-    <h2>Immediate Action Required</h2>
-    <div class="action-step"><span>1</span> DROP to your hands and knees</div>
-    <div class="action-step"><span>2</span> COVER your head and neck under shelter</div>
-    <div class="action-step"><span>3</span> HOLD ON until all shaking stops</div>
+    <h2>⛰️ Earthbender Survival Stance (Immediate Action)</h2>
+    <div class="action-step"><span>I</span> ROOT YOUR STANCE — Drop low to hands & knees</div>
+    <div class="action-step"><span>II</span> STONE SHIELD — Cover head & neck under solid shelter</div>
+    <div class="action-step"><span>III</span> ANCHOR TO THE EARTH — Hold on until vibrations cease</div>
   </div>
 
   <div class="card">
-    <h2>ESP-NOW Structural Sensor Array (Peak: <span id="peakVal">--</span> m/s²)</h2>
+    <h2>🟢 Ground Vibration Array (Peak: <span id="peakVal">0.00</span> m/s²)</h2>
     <div class="node-grid">
       <div class="node-box" id="n1Box">
-        <div class="node-title">NODE 1 (GW)</div>
+        <div class="node-title">ROOT NODE 1</div>
         <div class="node-val" id="n1Acc">-- m/s²</div>
-        <div class="node-badge bg-green" id="n1State">IDLE</div>
+        <div class="node-gyro" id="n1Gyr">-- °/s</div>
+        <div class="node-badge bg-calm" id="n1State">GROUNDED</div>
       </div>
       <div class="node-box" id="n2Box">
-        <div class="node-title">NODE 2</div>
+        <div class="node-title">PILLAR NODE 2</div>
         <div class="node-val" id="n2Acc">-- m/s²</div>
-        <div class="node-badge bg-gray" id="n2State">OFFLINE</div>
+        <div class="node-gyro" id="n2Gyr">-- °/s</div>
+        <div class="node-badge bg-severed" id="n2State">UNROOTED</div>
       </div>
       <div class="node-box" id="n3Box">
-        <div class="node-title">NODE 3</div>
+        <div class="node-title">FOUNDATION 3</div>
         <div class="node-val" id="n3Acc">-- m/s²</div>
-        <div class="node-badge bg-gray" id="n3State">OFFLINE</div>
+        <div class="node-gyro" id="n3Gyr">-- °/s</div>
+        <div class="node-badge bg-severed" id="n3State">UNROOTED</div>
       </div>
     </div>
   </div>
 
   <div class="card">
-    <h2>System Continuity Status</h2>
-    <div class="status-item"><span>ESP-NOW Mesh Link</span><span class="ok">✓ ACTIVE (Ch 1)</span></div>
-    <div class="status-item"><span>Local Captive Portal</span><span class="ok">✓ ACTIVE (192.168.4.1)</span></div>
-    <div class="status-item"><span>External Internet / Cloud</span><span class="offline">✕ UNAVAILABLE (Bypassed)</span></div>
+    <h2>🛡️ Ba Sing Se Continuity Diagnostics</h2>
+    <div class="status-item"><span>6-Axis Tremor Sense (MPU6050)</span><span class="ok">✓ CONNECTED TO GROUND</span></div>
+    <div class="status-item"><span>ESP-NOW Earth Pulse Link</span><span class="ok">✓ SYNCHRONIZED (Ch 1)</span></div>
+    <div class="status-item"><span>Local Sanctuary Portal</span><span class="gold">✓ 192.168.4.1 (Offline)</span></div>
+    <div class="status-item"><span>Surface Cloud / Fire Nation Grid</span><span class="offline">✕ BYPASSED (Zero-Trust)</span></div>
+    <div class="quote">"I release a sonic wave from my feet... I can see every vibration through the earth." — Toph Beifong</div>
   </div>
 
   <script>
     function updateNodeUI(idx, node) {
       const box = document.getElementById('n' + idx + 'Box');
       const acc = document.getElementById('n' + idx + 'Acc');
+      const gyr = document.getElementById('n' + idx + 'Gyr');
       const st  = document.getElementById('n' + idx + 'State');
       if (!node.online) {
         box.className = 'node-box';
         acc.innerText = '-- m/s²';
-        st.className = 'node-badge bg-gray';
-        st.innerText = 'OFFLINE';
+        gyr.innerText = '-- °/s';
+        st.className = 'node-badge bg-severed';
+        st.innerText = 'UNROOTED';
         return;
       }
       acc.innerText = node.accel.toFixed(2) + ' m/s²';
+      gyr.innerText = node.gyro.toFixed(1) + ' °/s';
       if (node.state >= 1) {
         box.className = 'node-box alert';
-        st.className = 'node-badge bg-red';
-        st.innerText = node.state === 2 ? 'EMERGENCY' : 'VERIFYING';
+        st.className = 'node-badge bg-quake';
+        st.innerText = node.state === 2 ? 'QUAKE!' : 'TREMOR';
       } else {
         box.className = 'node-box';
-        st.className = 'node-badge bg-green';
-        st.innerText = 'NORMAL';
+        st.className = 'node-badge bg-calm';
+        st.innerText = 'GROUNDED';
       }
     }
 
@@ -201,7 +284,7 @@ const char EMERGENCY_HTML[] PROGMEM = R"rawliteral(
         const data = await res.json();
         document.getElementById('peakVal').innerText = data.peak.toFixed(2);
         document.getElementById('consensusText').innerText = 
-          data.alertNodes + ' OF ' + data.onlineNodes + ' STRUCTURAL NODES REPORTING MOTION';
+          data.alertNodes + ' OF ' + data.onlineNodes + ' EARTH NODES SENSING SEISMIC WAVES';
         updateNodeUI(1, data.n1);
         updateNodeUI(2, data.n2);
         updateNodeUI(3, data.n3);
